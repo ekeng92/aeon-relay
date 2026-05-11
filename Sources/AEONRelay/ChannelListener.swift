@@ -3,7 +3,6 @@ import os
 
 private let logger = Logger(subsystem: "com.aeon.relay", category: "ChannelListener")
 
-@MainActor
 final class ChannelListener: ObservableObject {
     @Published var activeProviders: [String: Bool] = [:] // id -> connected
 
@@ -50,7 +49,7 @@ final class ChannelListener: ObservableObject {
 
         let provider = TelegramProvider(id: channel.name, botToken: botToken) { [weak self] message in
             guard let self = self else { return }
-            Task { @MainActor in
+            Task {
                 await self.handleMessage(message, channel: channel)
             }
         }
@@ -60,7 +59,7 @@ final class ChannelListener: ObservableObject {
 
         Task {
             try? await provider.start()
-            await MainActor.run {
+            DispatchQueue.main.async {
                 self.activeProviders[channel.name] = provider.isConnected
             }
         }

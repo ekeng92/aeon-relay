@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var configManager: ConfigManager
+    @ObservedObject var channelListener: ChannelListener
 
     var body: some View {
         ScrollView {
@@ -70,9 +71,10 @@ struct ContentView: View {
     }
 
     private func channelRow(_ channel: ChannelConfig) -> some View {
-        HStack {
+        let isConnected = channelListener.activeProviders[channel.name] ?? false
+        return HStack {
             Circle()
-                .fill(channel.enabled ? Color.green : Color.gray)
+                .fill(isConnected ? Color.green : (channel.enabled ? Color.orange : Color.gray))
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
                 Text(channel.name)
@@ -82,10 +84,14 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            if channel.enabled {
-                Text("active")
+            if isConnected {
+                Text("connected")
                     .font(.caption2)
                     .foregroundColor(.green)
+            } else if channel.enabled {
+                Text("connecting")
+                    .font(.caption2)
+                    .foregroundColor(.orange)
             } else {
                 Text("disabled")
                     .font(.caption2)
