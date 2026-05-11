@@ -287,25 +287,47 @@ final class ConfigManager: ObservableObject {
     // MARK: - Dependency Checks
 
     var copilotAvailable: Bool {
-        let paths = [
-            "/usr/local/bin/copilot",
-            "\(NSHomeDirectory())/.local/bin/copilot"
-        ]
-        if paths.contains(where: { fm.fileExists(atPath: $0) }) { return true }
-        // Check NVM path
-        if let nvmDir = ProcessInfo.processInfo.environment["NVM_DIR"] {
-            let nodeVersion = (try? String(contentsOf: URL(fileURLWithPath: "\(nvmDir)/alias/default"), encoding: .utf8))?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !nodeVersion.isEmpty && fm.fileExists(atPath: "\(nvmDir)/versions/node/\(nodeVersion)/bin/copilot") {
-                return true
-            }
-        }
-        return false
+        commandExists("copilot")
     }
 
     var claudeAvailable: Bool {
-        fm.fileExists(atPath: "/usr/local/bin/claude") ||
-        fm.fileExists(atPath: "\(NSHomeDirectory())/.local/bin/claude")
+        commandExists("claude")
+    }
+
+    var codexAvailable: Bool {
+        commandExists("codex")
+    }
+
+    private func commandExists(_ name: String) -> Bool {
+        // Check common paths first
+        let paths = [
+            "/usr/local/bin/\(name)",
+            "\(NSHomeDirectory())/.local/bin/\(name)",
+            "/opt/homebrew/bin/\(name)"
+        ]
+        if paths.contains(where: { fm.fileExists(atPath: $0) }) { return true }
+        // Check NVM path for node-based CLIs
+        if let nvmDir = ProcessInfo.processInfo.environment["NVM_DIR"] {
+            let aliasPath = URL(fileURLWithPath: "\(nvmDir)/alias/default")
+            let nodeVersion = (try? String(contentsOf: aliasPath, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !nodeVersion.isEmpty && fm.fileExists(atPath: "\(nvmDir)/versions/node/\(nodeVersion)/bin/\(name)") {
+                return true
+            }
+        }
+        // Fallback: shell out to `which`
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        process.arguments = [name]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
     }
 }
 

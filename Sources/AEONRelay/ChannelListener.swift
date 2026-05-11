@@ -4,7 +4,9 @@ import os
 private let logger = Logger(subsystem: "com.aeon.relay", category: "ChannelListener")
 
 final class ChannelListener: ObservableObject {
-    @Published var activeProviders: [String: Bool] = [:] // id -> connected
+    @Published var activeProviders: [String: Bool] = [:]  // id -> connected
+    @Published var channelErrors: [String: String] = [:]  // id -> error message
+    @Published var channelBots: [String: String] = [:]    // id -> @username
 
     private var providers: [String: TelegramProvider] = [:]
     private let configManager: ConfigManager
@@ -48,6 +50,8 @@ final class ChannelListener: ObservableObject {
                     DispatchQueue.main.async {
                         self.providers.removeValue(forKey: name)
                         self.activeProviders.removeValue(forKey: name)
+                        self.channelErrors.removeValue(forKey: name)
+                        self.channelBots.removeValue(forKey: name)
                     }
                 }
             }
@@ -67,16 +71,27 @@ final class ChannelListener: ObservableObject {
     private func startChannel(_ channel: ChannelConfig) {
         guard channel.provider == "telegram" else {
             logger.warning("Unsupported provider: \(channel.provider)")
+            DispatchQueue.main.async {
+                self.channelErrors[channel.name] = "Unsupported provider: \(channel.provider)"
+            }
             return
         }
 
         let botToken = resolveToken(channel.botToken)
         guard !botToken.isEmpty else {
             logger.error("No bot token for channel \(channel.name)")
+            DispatchQueue.main.async {
+                self.activeProviders[channel.name] = false
+                self.channelErrors[channel.name] = "Bot token not found. Check credentials.env for the env var specified in channel config."
+            }
+            configManager.logActivity("\(channel.name): bot token not found")
             return
         }
 
         configManager.logActivity("Starting channel: \(channel.name)")
+        DispatchQueue.main.async {
+            self.channelErrors.removeValue(forKey: channel.name)
+        }
 
         let provider = TelegramProvider(id: channel.name, botToken: botToken) { [weak self] message in
             guard let self = self else { return }
@@ -85,19 +100,30 @@ final class ChannelListener: ObservableObject {
             }
         }
 
+        provider.onStatusChange = { [weak self] connected, error in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                self.activeProviders[channel.name] = connected
+                if let error = error {
+                    self.channelErrors[channel.name] = error
+                    self.configManager.logActivity("\(channel.name): \(error)")
+                } else if connected {
+                    self.channelErrors.removeValue(forKey: channel.name)
+                    if let username = provider.botUsername {
+                        self.channelBots[channel.name] = "@\(username)"
+                    }
+                    self.configManager.logActivity("\(channel.name) connected\(provider.botUsername.map { " as @\($0)" } ?? "")")
+                }
+            }
+        }
+
         providers[channel.name] = provider
-        activeProviders[channel.name] = false
+        DispatchQueue.main.async {
+            self.activeProviders[channel.name] = false
+        }
 
         Task {
             try? await provider.start()
-            DispatchQueue.main.async {
-                self.activeProviders[channel.name] = provider.isConnected
-                if provider.isConnected {
-                    self.configManager.logActivity("\(channel.name) connected")
-                } else {
-                    self.configManager.logActivity("\(channel.name) failed to connect")
-                }
-            }
         }
     }
 

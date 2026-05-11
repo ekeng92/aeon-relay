@@ -7,12 +7,16 @@ final class TelegramProvider: MessageProvider {
     let id: String
     let displayName = "Telegram"
     private(set) var isConnected = false
+    private(set) var botUsername: String?
+    private(set) var lastError: String?
+    private(set) var connectionAttempts = 0
 
     private let botToken: String
     private let onMessage: (IncomingMessage) -> Void
     private var lastUpdateID: Int = 0
     private var pollingTask: Task<Void, Never>?
     private let session = URLSession.shared
+    var onStatusChange: ((Bool, String?) -> Void)?
 
     init(id: String, botToken: String, onMessage: @escaping (IncomingMessage) -> Void) {
         self.id = id
@@ -32,6 +36,7 @@ final class TelegramProvider: MessageProvider {
         pollingTask?.cancel()
         pollingTask = nil
         isConnected = false
+        onStatusChange?(false, nil)
     }
 
     func sendReply(_ message: String, to conversation: ConversationID) async throws {
@@ -69,7 +74,29 @@ final class TelegramProvider: MessageProvider {
 
     private func pollLoop() async {
         logger.info("Poll loop started")
-        isConnected = true
+        connectionAttempts += 1
+
+        // Validate bot token with getMe before starting
+        do {
+            let username = try await validateBot()
+            botUsername = username
+            isConnected = true
+            lastError = nil
+            onStatusChange?(true, nil)
+            logger.info("Bot validated: @\(username)")
+        } catch {
+            let msg: String
+            if let urlError = error as? URLError {
+                msg = "Network error: \(urlError.localizedDescription)"
+            } else {
+                msg = error.localizedDescription
+            }
+            logger.error("Bot validation failed for '\(self.id)': \(msg)")
+            isConnected = false
+            lastError = msg
+            onStatusChange?(false, msg)
+            return
+        }
 
         while !Task.isCancelled {
             do {
@@ -77,16 +104,56 @@ final class TelegramProvider: MessageProvider {
                 for update in updates {
                     processUpdate(update)
                 }
+                if !isConnected {
+                    isConnected = true
+                    lastError = nil
+                    onStatusChange?(true, nil)
+                }
             } catch {
                 if Task.isCancelled { break }
-                logger.error("Poll error: \(error.localizedDescription)")
+                let msg = error.localizedDescription
+                logger.error("Poll error: \(msg)")
                 isConnected = false
-                try? await Task.sleep(nanoseconds: 5_000_000_000) // 5s backoff
-                isConnected = true
+                lastError = "Poll error: \(msg)"
+                onStatusChange?(false, lastError)
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
         }
         isConnected = false
+        onStatusChange?(false, nil)
         logger.info("Poll loop ended")
+    }
+
+    private func validateBot() async throws -> String {
+        guard let url = URL(string: "\(baseURL)/getMe") else { throw RelayError.invalidURL }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw RelayError.sendFailed
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw RelayError.sendFailed
+        }
+
+        if httpResponse.statusCode == 401 {
+            throw NSError(domain: "Telegram", code: 401, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid bot token (401 Unauthorized)"
+            ])
+        }
+
+        guard let ok = json["ok"] as? Bool, ok,
+              let result = json["result"] as? [String: Any],
+              let username = result["username"] as? String else {
+            let description = (json["description"] as? String) ?? "Unknown error"
+            throw NSError(domain: "Telegram", code: httpResponse.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: description
+            ])
+        }
+
+        return username
     }
 
     private func getUpdates() async throws -> [[String: Any]] {
