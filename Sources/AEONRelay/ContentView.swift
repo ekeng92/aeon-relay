@@ -90,6 +90,7 @@ struct ContentView: View {
             HStack(spacing: 16) {
                 depIndicator("copilot", ok: configManager.copilotAvailable)
                 depIndicator("claude", ok: configManager.claudeAvailable)
+                depIndicator("codex", ok: configManager.codexAvailable)
             }
             .font(.caption2)
         }
@@ -111,7 +112,7 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
 
             if configManager.channels.isEmpty {
-                emptyState("No channels configured", detail: "Add JSON files to ~/.aeon-relay/channels/")
+                emptyState("No channels configured", detail: "Click 'Open Config' below, then add a JSON file to channels/")
             } else {
                 VStack(spacing: 6) {
                     ForEach(configManager.channels) { channel in
@@ -124,12 +125,29 @@ struct ContentView: View {
 
     private func channelRow(_ channel: ChannelConfig) -> some View {
         let isConnected = channelListener.activeProviders[channel.name] ?? false
+        let errorMsg = channelListener.channelErrors[channel.name]
+        let botName = channelListener.channelBots[channel.name]
+        let hasError = errorMsg != nil
         let isExpanded = expandedChannel == channel.name
+
+        let dotColor: Color = {
+            if !channel.enabled { return .gray }
+            if isConnected { return .green }
+            if hasError { return .red }
+            return .orange
+        }()
+
+        let statusText: String = {
+            if !channel.enabled { return "disabled" }
+            if isConnected { return botName ?? "connected" }
+            if let err = errorMsg { return err }
+            return "connecting..."
+        }()
 
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(isConnected ? Color.green : (channel.enabled ? Color.orange : Color.gray))
+                    .fill(dotColor)
                     .frame(width: 8, height: 8)
 
                 VStack(alignment: .leading, spacing: 1) {
@@ -140,9 +158,10 @@ struct ContentView: View {
                             .font(.system(size: 10))
                             .foregroundStyle(.tertiary)
                     }
-                    Text(isConnected ? "connected" : (channel.enabled ? "connecting" : "disabled"))
+                    Text(statusText)
                         .font(.system(size: 10))
-                        .foregroundStyle(isConnected ? .green : .secondary)
+                        .foregroundStyle(hasError ? .red : (isConnected ? .green : .secondary))
+                        .lineLimit(2)
                 }
 
                 Spacer()
@@ -513,15 +532,20 @@ struct ContentView: View {
 
     private var statusColor: Color {
         let connected = channelListener.activeProviders.values.contains(true)
+        let hasErrors = !channelListener.channelErrors.isEmpty
         let hasEnabled = configManager.channels.contains { $0.enabled }
         if connected { return .green }
+        if hasErrors { return .red }
         if hasEnabled { return .orange }
         return .red
     }
 
     private var statusTitle: String {
         let connected = channelListener.activeProviders.values.filter({ $0 }).count
+        let errorCount = channelListener.channelErrors.count
+        if connected > 0 && errorCount > 0 { return "\(connected) Connected, \(errorCount) Failed" }
         if connected > 0 { return "\(connected) Connected" }
+        if errorCount > 0 { return "\(errorCount) Failed" }
         let hasEnabled = configManager.channels.contains { $0.enabled }
         if hasEnabled { return "Connecting" }
         return "No Channels"
@@ -529,8 +553,13 @@ struct ContentView: View {
 
     private var statusSubtitle: String {
         let connected = channelListener.activeProviders.values.filter({ $0 }).count
+        let errorCount = channelListener.channelErrors.count
         if connected > 0 {
             return "Listening for messages on \(connected) channel(s)"
+        }
+        if errorCount > 0 {
+            let firstError = channelListener.channelErrors.values.first ?? ""
+            return firstError
         }
         let hasEnabled = configManager.channels.contains { $0.enabled }
         if hasEnabled { return "Establishing connections..." }
