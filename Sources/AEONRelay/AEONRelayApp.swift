@@ -15,11 +15,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var panel: NSPanel!
     let configManager = ConfigManager()
+    let channelListener: ChannelListener
     private var cancellable: AnyCancellable?
+
+    override init() {
+        self.channelListener = ChannelListener(configManager: configManager)
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configManager.ensureDirectories()
         configManager.loadConfig()
+        channelListener.startAll()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
@@ -47,19 +54,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.hidesOnDeactivate = true
         panel.animationBehavior = .utilityWindow
 
-        let hostingView = NSHostingView(rootView: ContentView(configManager: configManager))
+        let hostingView = NSHostingView(rootView: ContentView(configManager: configManager, channelListener: channelListener))
         panel.contentView = hostingView
 
-        cancellable = configManager.objectWillChange.sink { [weak self] _ in
+        cancellable = channelListener.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.updateIcon() }
         }
     }
 
     private func updateIcon() {
         guard let button = statusItem.button else { return }
-        let connected = configManager.channels.contains { $0.enabled }
-        let name = connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash"
-        let color: NSColor = connected ? .systemGreen : .systemGray
+        let hasConnected = channelListener.activeProviders.values.contains(true)
+        let name = hasConnected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash"
+        let color: NSColor = hasConnected ? .systemGreen : .systemGray
         button.image = tintedMenuBarIcon(name, color: color)
     }
 
