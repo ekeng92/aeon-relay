@@ -35,6 +35,35 @@ final class ChannelListener: ObservableObject {
         activeProviders.removeAll()
     }
 
+    func toggleChannel(_ name: String, enabled: Bool) {
+        configManager.toggleChannel(name, enabled: enabled)
+        if enabled {
+            if let channel = configManager.channels.first(where: { $0.name == name }) {
+                startChannel(channel)
+            }
+        } else {
+            if let provider = providers[name] {
+                Task {
+                    await provider.stop()
+                    DispatchQueue.main.async {
+                        self.providers.removeValue(forKey: name)
+                        self.activeProviders.removeValue(forKey: name)
+                    }
+                }
+            }
+        }
+    }
+
+    func reloadConfig() {
+        Task {
+            await stopAll()
+            DispatchQueue.main.async {
+                self.configManager.loadConfig()
+                self.startAll()
+            }
+        }
+    }
+
     private func startChannel(_ channel: ChannelConfig) {
         guard channel.provider == "telegram" else {
             logger.warning("Unsupported provider: \(channel.provider)")
@@ -46,6 +75,8 @@ final class ChannelListener: ObservableObject {
             logger.error("No bot token for channel \(channel.name)")
             return
         }
+
+        configManager.logActivity("Starting channel: \(channel.name)")
 
         let provider = TelegramProvider(id: channel.name, botToken: botToken) { [weak self] message in
             guard let self = self else { return }
@@ -61,6 +92,11 @@ final class ChannelListener: ObservableObject {
             try? await provider.start()
             DispatchQueue.main.async {
                 self.activeProviders[channel.name] = provider.isConnected
+                if provider.isConnected {
+                    self.configManager.logActivity("\(channel.name) connected")
+                } else {
+                    self.configManager.logActivity("\(channel.name) failed to connect")
+                }
             }
         }
     }
