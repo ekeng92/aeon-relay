@@ -186,6 +186,17 @@ final class ConfigManager: ObservableObject {
     }
 
     func saveBotToken(envName: String, token: String) {
+        // Sanitize token: strip whitespace and surrounding quotes
+        var cleanToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if (cleanToken.hasPrefix("\"") && cleanToken.hasSuffix("\"")) ||
+           (cleanToken.hasPrefix("'") && cleanToken.hasSuffix("'")) {
+            cleanToken = String(cleanToken.dropFirst().dropLast())
+        }
+        guard !cleanToken.isEmpty else {
+            logActivity("Skipped saving empty token for \(envName)")
+            return
+        }
+
         let credPath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/aeon/credentials.env")
 
@@ -203,16 +214,16 @@ final class ConfigManager: ObservableObject {
         for i in lines.indices {
             let parts = lines[i].split(separator: "=", maxSplits: 1)
             if parts.count >= 1 && parts[0].trimmingCharacters(in: .whitespaces) == envName {
-                lines[i] = "\(envName)=\"\(token)\""
+                lines[i] = "\(envName)=\"\(cleanToken)\""
                 found = true
                 break
             }
         }
         if !found {
             if let last = lines.last, last.isEmpty {
-                lines.insert("\(envName)=\"\(token)\"", at: lines.count - 1)
+                lines.insert("\(envName)=\"\(cleanToken)\"", at: lines.count - 1)
             } else {
-                lines.append("\(envName)=\"\(token)\"")
+                lines.append("\(envName)=\"\(cleanToken)\"")
             }
         }
 
@@ -291,6 +302,11 @@ final class ConfigManager: ObservableObject {
         request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 10
 
+        // Add PAT auth for private repos
+        if let pat = loadGitHubPAT() {
+            request.setValue("Bearer \(pat)", forHTTPHeaderField: "Authorization")
+        }
+
         URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -362,18 +378,51 @@ final class ConfigManager: ObservableObject {
         }
     }
 
+    // MARK: - GitHub Auth
+
+    private func loadGitHubPAT() -> String? {
+        let credPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/aeon/credentials.env")
+        guard let contents = try? String(contentsOf: credPath, encoding: .utf8) else { return nil }
+        for line in contents.split(separator: "\n") {
+            let parts = line.split(separator: "=", maxSplits: 1)
+            if parts.count == 2 && parts[0].trimmingCharacters(in: .whitespaces) == "GITHUB_AEON_PRIME_PAT" {
+                var value = String(parts[1]).trimmingCharacters(in: .whitespaces)
+                if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
+                   (value.hasPrefix("'") && value.hasSuffix("'")) {
+                    value = String(value.dropFirst().dropLast())
+                }
+                return value.isEmpty ? nil : value
+            }
+        }
+        return nil
+    }
+
     // MARK: - Dependency Checks
 
+    private var _depCache: [String: Bool] = [:]
+
     var copilotAvailable: Bool {
-        commandExists("copilot")
+        cachedCommandExists("copilot")
     }
 
     var claudeAvailable: Bool {
-        commandExists("claude")
+        cachedCommandExists("claude")
     }
 
     var codexAvailable: Bool {
-        commandExists("codex")
+        cachedCommandExists("codex")
+    }
+
+    func refreshDependencies() {
+        _depCache.removeAll()
+    }
+
+    private func cachedCommandExists(_ name: String) -> Bool {
+        if let cached = _depCache[name] { return cached }
+        let result = commandExists(name)
+        _depCache[name] = result
+        return result
     }
 
     private func commandExists(_ name: String) -> Bool {
