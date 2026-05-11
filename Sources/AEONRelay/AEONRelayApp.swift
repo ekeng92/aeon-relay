@@ -131,6 +131,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             positionPanelBelowStatusItem()
             panel.makeKeyAndOrderFront(nil)
+            if #available(macOS 14.0, *) {
+                NSApp.activate()
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+            }
 
             globalMonitor = NSEvent.addGlobalMonitorForEvents(
                 matching: [.leftMouseDown, .rightMouseDown]
