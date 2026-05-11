@@ -12,6 +12,8 @@ struct ContentView: View {
     @State private var channelNameInput = ""
     @State private var showDeleteConfirm: String?
 
+    @State private var editorError = ""
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -188,25 +190,34 @@ struct ContentView: View {
 
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Circle()
-                    .fill(dotColor)
-                    .frame(width: 8, height: 8)
+                // Tappable area for expand/collapse (excludes toggle)
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(dotColor)
+                        .frame(width: 8, height: 8)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 4) {
-                        Text(channel.name)
-                            .font(.caption.weight(.medium))
-                        Text(channel.provider)
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 4) {
+                            Text(channel.name)
+                                .font(.caption.weight(.medium))
+                            Text(channel.provider)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                        }
+                        Text(statusText)
                             .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(hasError ? .red : (isConnected ? .green : .secondary))
+                            .lineLimit(2)
                     }
-                    Text(statusText)
-                        .font(.system(size: 10))
-                        .foregroundStyle(hasError ? .red : (isConnected ? .green : .secondary))
-                        .lineLimit(2)
-                }
 
-                Spacer()
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        expandedChannel = isExpanded ? nil : channel.name
+                    }
+                }
 
                 Toggle("", isOn: Binding(
                     get: { channel.enabled },
@@ -220,15 +231,15 @@ struct ContentView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            expandedChannel = isExpanded ? nil : channel.name
+                        }
+                    }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    expandedChannel = isExpanded ? nil : channel.name
-                }
-            }
             .background {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(.quaternary.opacity(0.5))
@@ -363,12 +374,19 @@ struct ContentView: View {
                 Button(action: {
                     editingChannel = nil
                     isAddingChannel = false
+                    editorError = ""
                 }) {
                     Text("Cancel")
                         .font(.caption)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            }
+
+            if !editorError.isEmpty {
+                Text(editorError)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
             }
         }
         .padding(10)
@@ -391,7 +409,18 @@ struct ContentView: View {
 
     private func saveChannelFromEditor(_ channel: ChannelConfig, isNew: Bool) {
         let name = channelNameInput.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
+        guard !name.isEmpty else {
+            editorError = "Channel name is required"
+            return
+        }
+
+        // Check for duplicate names when adding new
+        if isNew && configManager.channels.contains(where: { $0.name == name }) {
+            editorError = "A channel named '\(name)' already exists"
+            return
+        }
+
+        editorError = ""
 
         // Determine the env var name for the token
         let envName = "RELAY_\(name.uppercased().replacingOccurrences(of: "-", with: "_"))_TOKEN"

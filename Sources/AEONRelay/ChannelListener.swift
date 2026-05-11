@@ -17,7 +17,9 @@ final class ChannelListener: ObservableObject {
 
     // Track running executions per profile
     private var runningExecutions: Set<String> = []
+    private var runningTasks: [String: Task<Void, Never>] = [String: Task<Void, Never>]()
     private var executionQueue: [(IncomingMessage, ChannelConfig, WorkspaceProfile)] = []
+    private var channelProfileOverrides: [String: String] = [:]
 
     init(configManager: ConfigManager) {
         self.configManager = configManager
@@ -113,6 +115,16 @@ final class ChannelListener: ObservableObject {
                         self.channelBots[channel.name] = "@\(username)"
                     }
                     self.configManager.logActivity("\(channel.name) connected\(provider.botUsername.map { " as @\($0)" } ?? "")")
+
+                    // Send greeting to allowed chat IDs
+                    if let greeting = channel.greeting, !greeting.isEmpty {
+                        for chatID in channel.allowFrom {
+                            Task {
+                                let conv = ConversationID(provider: channel.name, chatID: chatID)
+                                try? await provider.sendReply(greeting, to: conv)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -248,12 +260,45 @@ final class ChannelListener: ObservableObject {
                 await sendReply(list, to: message, channel: channel)
             }
 
+        case "/use":
+            if parts.count > 1 {
+                let profileName = String(parts[1]).trimmingCharacters(in: .whitespaces)
+                if configManager.profileNamed(profileName) != nil {
+                    channelProfileOverrides[channel.name] = profileName
+                    await sendReply("Switched to profile: \(profileName)", to: message, channel: channel)
+                } else {
+                    let available = configManager.profiles.map(\.name).joined(separator: ", ")
+                    await sendReply("Profile '\(profileName)' not found. Available: \(available)", to: message, channel: channel)
+                }
+            } else {
+                let current = resolveProfile(message: message, channel: channel)
+                let available = configManager.profiles.map(\.name).joined(separator: ", ")
+                await sendReply("Current: \(current)\nAvailable: \(available)", to: message, channel: channel)
+            }
+
+        case "/cancel":
+            if runningExecutions.isEmpty {
+                await sendReply("No running executions to cancel.", to: message, channel: channel)
+            } else {
+                let cancelled = runningExecutions.count
+                for (_, task) in runningTasks {
+                    task.cancel()
+                }
+                runningTasks.removeAll()
+                runningExecutions.removeAll()
+                await sendReply("Cancelled \(cancelled) running execution(s).", to: message, channel: channel)
+            }
+
         default:
             await sendReply("Unknown command. Use /help for available commands.", to: message, channel: channel)
         }
     }
 
     private func resolveProfile(message: IncomingMessage, channel: ChannelConfig) -> String {
+        // Check per-channel override from /use command
+        if let override = channelProfileOverrides[channel.name] {
+            return override
+        }
         // Check profile routing prefixes
         for (prefix, profile) in channel.profileRouting {
             if message.text.hasPrefix(prefix) {
