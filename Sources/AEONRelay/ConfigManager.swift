@@ -371,17 +371,24 @@ final class ConfigManager: ObservableObject {
             let repoDir = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Projects/aeon-relay")
 
-            guard FileManager.default.fileExists(atPath: repoDir.path) else {
-                DispatchQueue.main.async {
-                    self.updateState = .failed("Repo not found at ~/Projects/aeon-relay")
-                    self.logActivity("Update failed: repo not found")
-                }
-                return
+            let script: String
+            if FileManager.default.fileExists(atPath: repoDir.path) {
+                // Local repo exists: pull and rebuild
+                script = """
+                cd "\(repoDir.path)" && git pull --ff-only && make install
+                """
+            } else {
+                // Remote-install user: clone fresh, build, clean up
+                let tmpDir = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("aeon-relay-update")
+                script = """
+                rm -rf "\(tmpDir.path)" && \
+                git clone https://github.com/\(Self.githubRepo).git "\(tmpDir.path)" && \
+                cd "\(tmpDir.path)" && make install && \
+                rm -rf "\(tmpDir.path)"
+                """
             }
 
-            let script = """
-            cd "\(repoDir.path)" && git pull --ff-only && make install
-            """
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
             process.arguments = ["-l", "-c", script]
@@ -406,15 +413,17 @@ final class ConfigManager: ObservableObject {
         }
     }
 
-    // MARK: - GitHub Auth
+    // MARK: - Credential Resolution
 
-    private func loadGitHubPAT() -> String? {
+    /// Resolves a credential value from ~/.config/aeon/credentials.env by env var name.
+    /// Returns nil if the key is not found or the value is empty.
+    func resolveCredential(_ envName: String) -> String? {
         let credPath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/aeon/credentials.env")
         guard let contents = try? String(contentsOf: credPath, encoding: .utf8) else { return nil }
         for line in contents.split(separator: "\n") {
             let parts = line.split(separator: "=", maxSplits: 1)
-            if parts.count == 2 && parts[0].trimmingCharacters(in: .whitespaces) == "GITHUB_AEON_PRIME_PAT" {
+            if parts.count == 2 && parts[0].trimmingCharacters(in: .whitespaces) == envName {
                 var value = String(parts[1]).trimmingCharacters(in: .whitespaces)
                 if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
                    (value.hasPrefix("'") && value.hasSuffix("'")) {
@@ -424,6 +433,12 @@ final class ConfigManager: ObservableObject {
             }
         }
         return nil
+    }
+
+    // MARK: - GitHub Auth
+
+    private func loadGitHubPAT() -> String? {
+        resolveCredential("GITHUB_AEON_PRIME_PAT")
     }
 
     // MARK: - Dependency Checks

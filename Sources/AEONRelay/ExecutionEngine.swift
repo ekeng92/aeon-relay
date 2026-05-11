@@ -19,6 +19,38 @@ final class ExecutionEngine {
     // Allowed CLI tools for execution (prevents arbitrary command injection)
     private static let allowedBackends: Set<String> = ["copilot", "claude", "codex"]
 
+    // Track running processes for cancellation
+    private var activeProcesses: [String: Process] = [:]
+    private let lock = NSLock()
+
+    /// Cancel all running executions by terminating their process groups.
+    func cancelAll() -> Int {
+        lock.lock()
+        let count = activeProcesses.count
+        for (id, process) in activeProcesses {
+            if process.isRunning {
+                let pid = process.processIdentifier
+                kill(-pid, SIGTERM)
+                logger.info("[\(id)] Cancelled (SIGTERM to process group)")
+            }
+        }
+        activeProcesses.removeAll()
+        lock.unlock()
+        return count
+    }
+
+    private func trackProcess(_ id: String, _ process: Process) {
+        lock.lock()
+        activeProcesses[id] = process
+        lock.unlock()
+    }
+
+    private func untrackProcess(_ id: String) {
+        lock.lock()
+        activeProcesses.removeValue(forKey: id)
+        lock.unlock()
+    }
+
     func execute(prompt: String, profile: WorkspaceProfile) async throws -> ExecutionResult {
         let id = generateID()
         let startTime = Date()
@@ -48,6 +80,7 @@ final class ExecutionEngine {
         process.standardError = stderrPipe
 
         try process.run()
+        trackProcess(id, process)
 
         // Read pipes concurrently to prevent deadlock when output exceeds buffer size
         let stdoutTask = Task.detached { () -> Data in
@@ -75,6 +108,7 @@ final class ExecutionEngine {
 
         process.waitUntilExit()
         timeoutTask.cancel()
+        untrackProcess(id)
 
         let stdoutData = await stdoutTask.value
         let stderrData = await stderrTask.value
@@ -101,7 +135,8 @@ final class ExecutionEngine {
         )
     }
 
-    private func buildArguments(backend: ExecutionBackend, profile: WorkspaceProfile, prompt: String) -> [String] {
+    // Internal for testing
+    func buildArguments(backend: ExecutionBackend, profile: WorkspaceProfile, prompt: String) -> [String] {
         // Shell-safe escaping: wrap in single quotes, escape internal single quotes
         let escaped = "'" + prompt.replacingOccurrences(of: "'", with: "'\\''") + "'"
 

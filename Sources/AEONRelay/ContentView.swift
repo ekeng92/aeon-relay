@@ -431,11 +431,11 @@ struct ContentView: View {
             configManager.saveBotToken(envName: envName, token: trimmedToken)
         }
 
-        // Build the allow list
+        // Build the allow list (validate chat IDs are numeric)
         let allowList = chatIDInput
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+            .filter { !$0.isEmpty && $0.allSatisfy({ $0.isNumber || $0 == "-" }) }
 
         let newChannel = ChannelConfig(
             name: name,

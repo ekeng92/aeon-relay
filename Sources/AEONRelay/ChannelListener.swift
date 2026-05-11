@@ -286,16 +286,19 @@ final class ChannelListener: ObservableObject {
             }
 
         case "/cancel":
-            if runningExecutions.isEmpty {
+            // Cancel Swift tasks
+            let taskCount = runningTasks.count
+            for (_, task) in runningTasks {
+                task.cancel()
+            }
+            runningTasks.removeAll()
+            runningExecutions.removeAll()
+            // Kill actual OS processes via ExecutionEngine
+            let processCount = executionEngine.cancelAll()
+            if taskCount == 0 && processCount == 0 {
                 await sendReply("No running executions to cancel.", to: message, channel: channel)
             } else {
-                let cancelled = runningExecutions.count
-                for (_, task) in runningTasks {
-                    task.cancel()
-                }
-                runningTasks.removeAll()
-                runningExecutions.removeAll()
-                await sendReply("Cancelled \(cancelled) running execution(s).", to: message, channel: channel)
+                await sendReply("Cancelled \(max(taskCount, processCount)) running execution(s).", to: message, channel: channel)
             }
 
         default:
@@ -329,22 +332,9 @@ final class ChannelListener: ObservableObject {
     private func resolveToken(_ tokenSpec: String) -> String {
         if tokenSpec.hasPrefix("env:") {
             let envName = String(tokenSpec.dropFirst(4))
-            // Check credentials file first
-            let credPath = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".config/aeon/credentials.env")
-            if let contents = try? String(contentsOf: credPath, encoding: .utf8) {
-                for line in contents.split(separator: "\n") {
-                    let parts = line.split(separator: "=", maxSplits: 1)
-                    if parts.count == 2 && parts[0].trimmingCharacters(in: .whitespaces) == envName {
-                        var value = String(parts[1]).trimmingCharacters(in: .whitespaces)
-                        // Strip surrounding quotes
-                        if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
-                           (value.hasPrefix("'") && value.hasSuffix("'")) {
-                            value = String(value.dropFirst().dropLast())
-                        }
-                        return value
-                    }
-                }
+            // Use shared credential resolution
+            if let value = configManager.resolveCredential(envName) {
+                return value
             }
             // Fall back to environment variable
             return ProcessInfo.processInfo.environment[envName] ?? ""
