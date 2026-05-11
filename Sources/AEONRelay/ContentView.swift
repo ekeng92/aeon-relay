@@ -650,6 +650,12 @@ struct ContentView: View {
                     configManager.logActivity("Config reloaded")
                 }
             }
+
+            HStack(spacing: 8) {
+                actionButton("GitHub", icon: "arrow.up.right.square", tint: Color(.systemGray)) {
+                    NSWorkspace.shared.open(URL(string: "https://github.com/ekeng92/aeon-relay")!)
+                }
+            }
         }
     }
 
