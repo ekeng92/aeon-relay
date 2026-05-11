@@ -11,6 +11,15 @@ struct AEONRelayApp: App {
     }
 }
 
+// MARK: - Keyable Panel
+
+/// NSPanel with `.nonactivatingPanel` blocks SwiftUI button events.
+/// This subclass restores key-window capability so buttons, toggles,
+/// text fields, and disclosure carets all work correctly.
+final class KeyablePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var panel: NSPanel!
@@ -48,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let panelSize = NSSize(width: 380, height: 640)
-        panel = NSPanel(
+        panel = KeyablePanel(
             contentRect: NSRect(origin: .zero, size: panelSize),
             styleMask: [.nonactivatingPanel, .titled, .closable, .fullSizeContentView],
             backing: .buffered,
