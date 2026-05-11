@@ -142,6 +142,84 @@ final class ConfigManager: ObservableObject {
         loadChannels()
     }
 
+    func saveChannel(_ channel: ChannelConfig) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(channel) else { return }
+
+        let dir = Self.relayHome.appendingPathComponent("channels")
+        let filename = channel.name
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: "/", with: "-")
+        let path = dir.appendingPathComponent("\(filename).json")
+
+        // If renaming, delete old file
+        if let existing = findChannelFile(named: channel.name), existing != path {
+            try? fm.removeItem(at: existing)
+        }
+
+        try? data.write(to: path)
+        loadChannels()
+        logActivity("Saved channel: \(channel.name)")
+    }
+
+    func deleteChannel(_ name: String) {
+        if let file = findChannelFile(named: name) {
+            try? fm.removeItem(at: file)
+            loadChannels()
+            logActivity("Deleted channel: \(name)")
+        }
+    }
+
+    private func findChannelFile(named name: String) -> URL? {
+        let dir = Self.relayHome.appendingPathComponent("channels")
+        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter({ $0.pathExtension == "json" }) else { return nil }
+        for file in files {
+            guard let data = try? Data(contentsOf: file),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  json["name"] as? String == name else { continue }
+            return file
+        }
+        return nil
+    }
+
+    func saveBotToken(envName: String, token: String) {
+        let credPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/aeon/credentials.env")
+
+        // Ensure directory exists
+        let credDir = credPath.deletingLastPathComponent()
+        try? fm.createDirectory(at: credDir, withIntermediateDirectories: true)
+
+        var lines: [String] = []
+        if let contents = try? String(contentsOf: credPath, encoding: .utf8) {
+            lines = contents.components(separatedBy: "\n")
+        }
+
+        // Replace or append
+        var found = false
+        for i in lines.indices {
+            let parts = lines[i].split(separator: "=", maxSplits: 1)
+            if parts.count >= 1 && parts[0].trimmingCharacters(in: .whitespaces) == envName {
+                lines[i] = "\(envName)=\"\(token)\""
+                found = true
+                break
+            }
+        }
+        if !found {
+            if let last = lines.last, last.isEmpty {
+                lines.insert("\(envName)=\"\(token)\"", at: lines.count - 1)
+            } else {
+                lines.append("\(envName)=\"\(token)\"")
+            }
+        }
+
+        try? lines.joined(separator: "\n").write(to: credPath, atomically: true, encoding: .utf8)
+        logActivity("Saved credential: \(envName)")
+    }
+
     func openConfigFolder() {
         NSWorkspace.shared.open(Self.relayHome)
     }
@@ -348,16 +426,31 @@ struct GlobalConfig: Codable {
 
 struct ChannelConfig: Codable, Identifiable {
     var id: String { name }
-    let name: String
-    let provider: String
-    let botToken: String
+    var name: String
+    var provider: String
+    var botToken: String
     var enabled: Bool
-    let allowFrom: [String]
-    let defaultProfile: String
-    let profileRouting: [String: String]
-    let greeting: String?
-    let showTyping: Bool
-    let maxMessageLength: Int
+    var allowFrom: [String]
+    var defaultProfile: String
+    var profileRouting: [String: String]
+    var greeting: String?
+    var showTyping: Bool
+    var maxMessageLength: Int
+
+    static func newTelegram() -> ChannelConfig {
+        ChannelConfig(
+            name: "",
+            provider: "telegram",
+            botToken: "env:RELAY_TELEGRAM_TOKEN",
+            enabled: false,
+            allowFrom: [],
+            defaultProfile: "default",
+            profileRouting: [:],
+            greeting: "AEON Relay connected.",
+            showTyping: true,
+            maxMessageLength: 4096
+        )
+    }
 }
 
 struct WorkspaceProfile: Codable, Identifiable {
