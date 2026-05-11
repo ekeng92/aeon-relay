@@ -1,0 +1,10 @@
+{
+  "name": "kengs-landing-dev",
+  "description": "Keng's Landing full-stack development",
+  "workdir": "~/Projects/kengs-landing",
+  "agent": "aeon-dev-lead",
+  "model": "claude-sonnet-4",
+  "backend": "copilot",
+  "timeout": 300,
+  "env": {}
+}

@@ -1,0 +1,15 @@
+{
+  "name": "telegram-dev",
+  "provider": "telegram",
+  "botToken": "env:RELAY_TELEGRAM_TOKEN",
+  "enabled": false,
+  "allowFrom": ["YOUR_CHAT_ID"],
+  "defaultProfile": "default",
+  "profileRouting": {
+    "/kl": "kengs-landing-dev",
+    "/ck": "chatkey-prime"
+  },
+  "greeting": "AEON Relay connected. Default: default. Use /profiles to see options.",
+  "showTyping": true,
+  "maxMessageLength": 4096
+}
