@@ -74,12 +74,13 @@ final class TelegramProvider: MessageProvider {
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let body: [String: Any] = [
-            "chat_id": conversation.chatID,
-            "text": message,
-            "parse_mode": "Markdown"
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        struct SendMessageBody: Encodable {
+            let chat_id: String
+            let text: String
+            let parse_mode: String
+        }
+        let body = SendMessageBody(chat_id: conversation.chatID, text: message, parse_mode: "Markdown")
+        request.httpBody = try JSONEncoder().encode(body)
 
         let (_, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
@@ -94,8 +95,11 @@ final class TelegramProvider: MessageProvider {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = ["chat_id": chatID, "action": "typing"]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        struct ChatActionBody: Encodable {
+            let chat_id: String
+            let action: String
+        }
+        request.httpBody = try? JSONEncoder().encode(ChatActionBody(chat_id: chatID, action: "typing"))
         _ = try? await session.data(for: request)
     }
 
@@ -136,16 +140,21 @@ final class TelegramProvider: MessageProvider {
                 if !isConnected {
                     isConnected = true
                     lastError = nil
+                    connectionAttempts = 0
                     onStatusChange?(true, nil)
                 }
             } catch {
                 if Task.isCancelled { break }
+                connectionAttempts += 1
                 let msg = error.localizedDescription
                 logger.error("Poll error: \(msg)")
                 isConnected = false
                 lastError = "Poll error: \(msg)"
                 onStatusChange?(false, lastError)
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                // Exponential backoff: 5s, 10s, 20s, 40s, capped at 60s
+                let backoff = min(5.0 * pow(2.0, Double(min(connectionAttempts - 1, 4))), 60.0)
+                logger.info("Reconnecting in \(String(format: "%.0f", backoff))s (attempt \(self.connectionAttempts))")
+                try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
             }
         }
         isConnected = false
@@ -163,20 +172,16 @@ final class TelegramProvider: MessageProvider {
             throw RelayError.sendFailed
         }
 
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw RelayError.sendFailed
-        }
-
         if httpResponse.statusCode == 401 {
             throw NSError(domain: "Telegram", code: 401, userInfo: [
                 NSLocalizedDescriptionKey: "Invalid bot token (401 Unauthorized)"
             ])
         }
 
-        guard let ok = json["ok"] as? Bool, ok,
-              let result = json["result"] as? [String: Any],
-              let username = result["username"] as? String else {
-            let description = (json["description"] as? String) ?? "Unknown error"
+        let decoded = try JSONDecoder().decode(TelegramAPIResponse<TelegramUser>.self, from: data)
+
+        guard decoded.ok, let user = decoded.result, let username = user.username else {
+            let description = decoded.description ?? "Unknown error"
             throw NSError(domain: "Telegram", code: httpResponse.statusCode, userInfo: [
                 NSLocalizedDescriptionKey: description
             ])
@@ -185,7 +190,7 @@ final class TelegramProvider: MessageProvider {
         return username
     }
 
-    private func getUpdates() async throws -> [[String: Any]] {
+    private func getUpdates() async throws -> [TelegramUpdate] {
         var urlString = "\(baseURL)/getUpdates?timeout=30"
         if lastUpdateID > 0 {
             urlString += "&offset=\(lastUpdateID + 1)"
@@ -196,29 +201,23 @@ final class TelegramProvider: MessageProvider {
         request.timeoutInterval = 35 // slightly more than Telegram's long poll timeout
 
         let (data, _) = try await session.data(for: request)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let ok = json["ok"] as? Bool, ok,
-              let result = json["result"] as? [[String: Any]] else {
-            return []
-        }
-        return result
+        let decoded = try JSONDecoder().decode(TelegramAPIResponse<[TelegramUpdate]>.self, from: data)
+        guard decoded.ok else { return [] }
+        return decoded.result ?? []
     }
 
-    private func processUpdate(_ update: [String: Any]) {
-        guard let updateID = update["update_id"] as? Int else { return }
-        lastUpdateID = max(lastUpdateID, updateID)
+    private func processUpdate(_ update: TelegramUpdate) {
+        lastUpdateID = max(lastUpdateID, update.update_id)
 
-        guard let message = update["message"] as? [String: Any],
-              let text = message["text"] as? String,
-              let from = message["from"] as? [String: Any],
-              let senderID = from["id"] as? Int,
-              let chat = message["chat"] as? [String: Any],
-              let chatID = chat["id"] as? Int else { return }
+        guard let message = update.message,
+              let text = message.text,
+              let from = message.from,
+              let chat = message.chat else { return }
 
         let incoming = IncomingMessage(
             provider: id,
-            senderID: String(senderID),
-            conversationID: ConversationID(provider: id, chatID: String(chatID)),
+            senderID: String(from.id),
+            conversationID: ConversationID(provider: id, chatID: String(chat.id)),
             text: text,
             timestamp: Date(),
             replyTo: nil
@@ -235,4 +234,37 @@ enum RelayError: Error {
     case unauthorized
     case rateLimited
     case profileNotFound(String)
+}
+
+// MARK: - Telegram API Codable Models
+
+struct TelegramAPIResponse<T: Decodable>: Decodable {
+    let ok: Bool
+    let result: T?
+    let description: String?
+}
+
+struct TelegramUser: Decodable {
+    let id: Int
+    let is_bot: Bool?
+    let username: String?
+    let first_name: String?
+}
+
+struct TelegramChat: Decodable {
+    let id: Int
+    let type: String?
+}
+
+struct TelegramMessage: Decodable {
+    let message_id: Int?
+    let from: TelegramUser?
+    let chat: TelegramChat?
+    let text: String?
+    let date: Int?
+}
+
+struct TelegramUpdate: Decodable {
+    let update_id: Int
+    let message: TelegramMessage?
 }

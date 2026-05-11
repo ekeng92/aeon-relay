@@ -54,7 +54,7 @@ All config lives in `~/.aeon-relay/`:
 │   └── default.json         # Workspace profile (workdir, agent, model)
 ├── audit/
 │   └── YYYY-MM-DD.jsonl     # Execution audit logs
-└── state.json               # Runtime state
+└── logs/                    # Runtime logs
 ```
 
 ## In-Channel Commands

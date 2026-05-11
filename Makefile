@@ -48,6 +48,13 @@ install: app
 	@codesign --force --deep --sign - "$(INSTALL_DIR)/$(APP_NAME).app" 2>/dev/null || true
 	@touch "$(INSTALL_DIR)/$(APP_NAME).app"
 	@echo "Installed: $(INSTALL_DIR)/$(APP_NAME).app"
+	@# Install LaunchAgent for auto-start on login
+	@mkdir -p "$(HOME)/Library/LaunchAgents"
+	@sed "s|__BINARY_PATH__|$(INSTALL_DIR)/$(APP_NAME).app/Contents/MacOS/$(BINARY_NAME)|g" \
+		resources/com.aeon.relay.plist > "$(HOME)/Library/LaunchAgents/com.aeon.relay.plist"
+	@launchctl bootout gui/$$(id -u) "$(HOME)/Library/LaunchAgents/com.aeon.relay.plist" 2>/dev/null || true
+	@launchctl bootstrap gui/$$(id -u) "$(HOME)/Library/LaunchAgents/com.aeon.relay.plist" 2>/dev/null || true
+	@echo "LaunchAgent installed (auto-start on login)"
 	@echo "Opening..."
 	@open "$(INSTALL_DIR)/$(APP_NAME).app"
 
@@ -56,9 +63,11 @@ uninstall:
 	@if pgrep -x $(BINARY_NAME) >/dev/null 2>&1; then \
 		pkill -x $(BINARY_NAME) 2>/dev/null || true; \
 	fi
+	@launchctl bootout gui/$$(id -u) "$(HOME)/Library/LaunchAgents/com.aeon.relay.plist" 2>/dev/null || true
+	@rm -f "$(HOME)/Library/LaunchAgents/com.aeon.relay.plist"
 	@rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
 	@rm -rf "$(HOME)/.aeon-relay"
-	@echo "Removed from $(INSTALL_DIR) and ~/.aeon-relay"
+	@echo "Removed from $(INSTALL_DIR), LaunchAgent, and ~/.aeon-relay"
 
 test:
 	@swift test 2>&1
