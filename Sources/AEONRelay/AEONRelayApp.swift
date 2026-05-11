@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let configManager = ConfigManager()
     let channelListener: ChannelListener
     private var cancellable: AnyCancellable?
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
 
     override init() {
         self.channelListener = ChannelListener(configManager: configManager)
@@ -36,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updateIcon()
         }
 
-        let panelSize = NSSize(width: 380, height: 520)
+        let panelSize = NSSize(width: 380, height: 640)
         panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: panelSize),
             styleMask: [.nonactivatingPanel, .titled, .closable, .fullSizeContentView],
@@ -51,10 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.isReleasedWhenClosed = false
         panel.hasShadow = true
         panel.backgroundColor = .windowBackgroundColor
-        panel.hidesOnDeactivate = true
+        panel.hidesOnDeactivate = false
         panel.animationBehavior = .utilityWindow
 
-        let hostingView = NSHostingView(rootView: ContentView(configManager: configManager, channelListener: channelListener))
+        let hostingView = NSHostingView(
+            rootView: ContentView(configManager: configManager, channelListener: channelListener)
+        )
         panel.contentView = hostingView
 
         cancellable = channelListener.objectWillChange.sink { [weak self] _ in
@@ -65,9 +69,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateIcon() {
         guard let button = statusItem.button else { return }
         let hasConnected = channelListener.activeProviders.values.contains(true)
-        let name = hasConnected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash"
-        let color: NSColor = hasConnected ? .systemGreen : .systemGray
+        let hasEnabled = configManager.channels.contains { $0.enabled }
+        let name: String
+        let color: NSColor
+
+        if hasConnected {
+            name = "antenna.radiowaves.left.and.right"
+            color = .systemGreen
+        } else if hasEnabled {
+            name = "antenna.radiowaves.left.and.right"
+            color = .systemOrange
+        } else {
+            name = "antenna.radiowaves.left.and.right.slash"
+            color = .systemGray
+        }
         button.image = tintedMenuBarIcon(name, color: color)
+
+        // Badge count: active executions
+        let activeCount = channelListener.activeProviders.values.filter({ $0 }).count
+        if activeCount > 0 {
+            button.attributedTitle = NSAttributedString(
+                string: " \(activeCount)",
+                attributes: [
+                    .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .bold),
+                    .baselineOffset: 1
+                ]
+            )
+        } else {
+            button.title = ""
+        }
     }
 
     private func tintedMenuBarIcon(_ name: String, color: NSColor) -> NSImage {
@@ -88,19 +118,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePanel() {
         if panel.isVisible {
-            panel.orderOut(nil)
-            return
+            closePanel()
+        } else {
+            positionPanelBelowStatusItem()
+            panel.makeKeyAndOrderFront(nil)
+
+            globalMonitor = NSEvent.addGlobalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown]
+            ) { [weak self] _ in
+                self?.closePanel()
+            }
+
+            localMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown]
+            ) { [weak self] event in
+                guard let self else { return event }
+                if event.window === self.panel { return event }
+                if event.window === self.statusItem.button?.window { return event }
+                self.closePanel()
+                return event
+            }
+        }
+    }
+
+    private func positionPanelBelowStatusItem() {
+        guard let button = statusItem.button,
+              let buttonWindow = button.window else { return }
+        let buttonRect = button.convert(button.bounds, to: nil)
+        let screenRect = buttonWindow.convertToScreen(buttonRect)
+
+        let panelWidth = panel.frame.width
+        let panelHeight = panel.frame.height
+        var x = screenRect.midX - panelWidth / 2
+        let y = screenRect.minY - panelHeight - 4
+
+        if let screen = NSScreen.main {
+            let maxX = screen.visibleFrame.maxX
+            let minX = screen.visibleFrame.minX
+            if x + panelWidth > maxX { x = maxX - panelWidth }
+            if x < minX { x = minX }
         }
 
-        guard let button = statusItem.button else { return }
-        let buttonFrame = button.window?.convertToScreen(button.frame) ?? .zero
-        let panelSize = panel.frame.size
-
-        let x = buttonFrame.midX - panelSize.width / 2
-        let y = buttonFrame.minY - panelSize.height - 4
-
         panel.setFrameOrigin(NSPoint(x: x, y: y))
-        panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func closePanel() {
+        panel.orderOut(nil)
+        if let m = globalMonitor { NSEvent.removeMonitor(m); globalMonitor = nil }
+        if let m = localMonitor { NSEvent.removeMonitor(m); localMonitor = nil }
     }
 }
