@@ -5,6 +5,12 @@ struct ContentView: View {
     @ObservedObject var channelListener: ChannelListener
     @State private var expandedChannel: String?
     @State private var expandedProfile: String?
+    @State private var editingChannel: ChannelConfig?
+    @State private var isAddingChannel = false
+    @State private var tokenInput = ""
+    @State private var chatIDInput = ""
+    @State private var channelNameInput = ""
+    @State private var showDeleteConfirm: String?
 
     var body: some View {
         ScrollView {
@@ -107,12 +113,47 @@ struct ContentView: View {
 
     private var channelsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("CHANNELS")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("CHANNELS")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: {
+                    editingChannel = ChannelConfig.newTelegram()
+                    channelNameInput = ""
+                    tokenInput = ""
+                    chatIDInput = ""
+                    isAddingChannel = true
+                }) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                }
+                .buttonStyle(.plain)
+                .help("Add channel")
+            }
 
-            if configManager.channels.isEmpty {
-                emptyState("No channels configured", detail: "Click 'Open Config' below, then add a JSON file to channels/")
+            if isAddingChannel, let channel = editingChannel {
+                channelEditor(channel, isNew: true)
+            }
+
+            if configManager.channels.isEmpty && !isAddingChannel {
+                VStack(spacing: 8) {
+                    emptyState("No channels configured", detail: "Click + above to add a Telegram channel")
+                    Button(action: {
+                        editingChannel = ChannelConfig.newTelegram()
+                        channelNameInput = ""
+                        tokenInput = ""
+                        chatIDInput = ""
+                        isAddingChannel = true
+                    }) {
+                        Label("Add Telegram Channel", systemImage: "plus.circle")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.blue)
+                    .controlSize(.small)
+                }
             } else {
                 VStack(spacing: 6) {
                     ForEach(configManager.channels) { channel in
@@ -129,6 +170,7 @@ struct ContentView: View {
         let botName = channelListener.channelBots[channel.name]
         let hasError = errorMsg != nil
         let isExpanded = expandedChannel == channel.name
+        let isEditing = !isAddingChannel && editingChannel?.name == channel.name
 
         let dotColor: Color = {
             if !channel.enabled { return .gray }
@@ -174,26 +216,33 @@ struct ContentView: View {
                 .controlSize(.mini)
                 .labelsHidden()
 
-                Button(action: { withAnimation(.easeInOut(duration: 0.2)) {
-                    expandedChannel = isExpanded ? nil : channel.name
-                }}) {
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    expandedChannel = isExpanded ? nil : channel.name
+                }
+            }
             .background {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(.quaternary.opacity(0.5))
             }
 
             if isExpanded {
-                channelDetail(channel)
-                    .padding(.leading, 20)
-                    .padding(.vertical, 6)
+                if isEditing, let editing = editingChannel {
+                    channelEditor(editing, isNew: false)
+                        .padding(.top, 6)
+                } else {
+                    channelDetail(channel)
+                        .padding(.leading, 20)
+                        .padding(.vertical, 6)
+                }
             }
         }
     }
@@ -213,6 +262,172 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Divider().padding(.vertical, 4)
+
+            HStack(spacing: 8) {
+                Button(action: {
+                    editingChannel = channel
+                    channelNameInput = channel.name
+                    tokenInput = ""
+                    chatIDInput = channel.allowFrom.joined(separator: ", ")
+                }) {
+                    Label("Edit", systemImage: "pencil")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .tint(.blue)
+                .controlSize(.mini)
+
+                if showDeleteConfirm == channel.name {
+                    Button(action: {
+                        channelListener.toggleChannel(channel.name, enabled: false)
+                        configManager.deleteChannel(channel.name)
+                        showDeleteConfirm = nil
+                        expandedChannel = nil
+                    }) {
+                        Label("Confirm Delete", systemImage: "trash.fill")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .controlSize(.mini)
+
+                    Button(action: { showDeleteConfirm = nil }) {
+                        Text("Cancel")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                } else {
+                    Button(action: { showDeleteConfirm = channel.name }) {
+                        Label("Delete", systemImage: "trash")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .controlSize(.mini)
+                }
+
+                Spacer()
+            }
+        }
+    }
+
+    // MARK: - Channel Editor
+
+    private func channelEditor(_ channel: ChannelConfig, isNew: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(isNew ? "NEW CHANNEL" : "EDIT CHANNEL")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            editorField("Name", text: $channelNameInput, placeholder: "my-telegram-bot")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Bot Token")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                SecureField(isNew ? "Paste from @BotFather" : "Leave blank to keep current", text: $tokenInput)
+                    .font(.caption)
+                    .textFieldStyle(.roundedBorder)
+                Text("Get one from @BotFather on Telegram")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Your Telegram Chat ID")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                TextField("e.g. 123456789", text: $chatIDInput)
+                    .font(.caption)
+                    .textFieldStyle(.roundedBorder)
+                Text("Send /start to @userinfobot to get yours")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+
+            HStack(spacing: 8) {
+                Button(action: {
+                    saveChannelFromEditor(channel, isNew: isNew)
+                }) {
+                    Label(isNew ? "Add Channel" : "Save", systemImage: isNew ? "plus.circle" : "checkmark.circle")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .tint(.blue)
+                .controlSize(.small)
+                .disabled(channelNameInput.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                Button(action: {
+                    editingChannel = nil
+                    isAddingChannel = false
+                }) {
+                    Text("Cancel")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(10)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.quaternary)
+        }
+    }
+
+    private func editorField(_ label: String, text: Binding<String>, placeholder: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            TextField(placeholder, text: text)
+                .font(.caption)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    private func saveChannelFromEditor(_ channel: ChannelConfig, isNew: Bool) {
+        let name = channelNameInput.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+
+        // Determine the env var name for the token
+        let envName = "RELAY_\(name.uppercased().replacingOccurrences(of: "-", with: "_"))_TOKEN"
+
+        // Save the bot token to credentials.env if provided
+        let trimmedToken = tokenInput.trimmingCharacters(in: .whitespaces)
+        if !trimmedToken.isEmpty {
+            configManager.saveBotToken(envName: envName, token: trimmedToken)
+        }
+
+        // Build the allow list
+        let allowList = chatIDInput
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        let newChannel = ChannelConfig(
+            name: name,
+            provider: "telegram",
+            botToken: trimmedToken.isEmpty && !isNew ? channel.botToken : "env:\(envName)",
+            enabled: isNew ? true : channel.enabled,
+            allowFrom: allowList.isEmpty ? channel.allowFrom : allowList,
+            defaultProfile: channel.defaultProfile,
+            profileRouting: channel.profileRouting,
+            greeting: channel.greeting,
+            showTyping: channel.showTyping,
+            maxMessageLength: channel.maxMessageLength
+        )
+
+        configManager.saveChannel(newChannel)
+        editingChannel = nil
+        isAddingChannel = false
+
+        // Auto-start the new channel
+        if newChannel.enabled {
+            channelListener.reloadConfig()
         }
     }
 
@@ -326,17 +541,19 @@ struct ContentView: View {
                     .fill(workdirExists ? Color.green : Color.red)
                     .frame(width: 6, height: 6)
                     .help(workdirExists ? "Workdir exists" : "Workdir not found")
-                Button(action: { withAnimation(.easeInOut(duration: 0.2)) {
-                    expandedProfile = isExpanded ? nil : profile.name
-                }}) {
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    expandedProfile = isExpanded ? nil : profile.name
+                }
+            }
             .background {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(.quaternary.opacity(0.5))
