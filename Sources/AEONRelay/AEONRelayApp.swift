@@ -35,6 +35,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Single-instance guard: quit if another copy is already running
+        let dominated = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+        if dominated.count > 1 {
+            NSApp.terminate(nil)
+            return
+        }
+
         configManager.ensureDirectories()
         configManager.loadConfig()
         channelListener.startAll()
