@@ -34,6 +34,11 @@ app:
 	@echo "Built: $(APP_BUNDLE) ($(GIT_SHA))"
 
 run: app
+	@if pgrep -x $(BINARY_NAME) >/dev/null 2>&1; then \
+		echo "Stopping running instance..."; \
+		osascript -e 'quit app "$(APP_NAME)"' 2>/dev/null || pkill -x $(BINARY_NAME) 2>/dev/null || true; \
+		sleep 1; \
+	fi
 	@open "$(APP_BUNDLE)"
 
 install: app
@@ -42,7 +47,8 @@ install: app
 	@if pgrep -x $(BINARY_NAME) >/dev/null 2>&1; then \
 		echo "Stopping running instance..."; \
 		osascript -e 'quit app "$(APP_NAME)"' 2>/dev/null || pkill -x $(BINARY_NAME) 2>/dev/null || true; \
-		sleep 1; \
+		for i in 1 2 3 4 5; do pgrep -x $(BINARY_NAME) >/dev/null 2>&1 || break; sleep 1; done; \
+		pkill -9 -x $(BINARY_NAME) 2>/dev/null || true; \
 	fi
 	@rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
 	@cp -R "$(APP_BUNDLE)" "$(INSTALL_DIR)/"
