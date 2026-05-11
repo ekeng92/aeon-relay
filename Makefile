@@ -30,6 +30,7 @@ app:
 	@test -f resources/AppIcon.icns && cp resources/AppIcon.icns "$(APP_BUNDLE)/Contents/Resources/" || true
 	@codesign --force --deep --sign - "$(APP_BUNDLE)" 2>/dev/null || true
 	@touch "$(APP_BUNDLE)"
+	@touch "$(APP_BUNDLE)/../.metadata_never_index"
 	@echo "Built: $(APP_BUNDLE) ($(GIT_SHA))"
 
 run: app
@@ -55,6 +56,8 @@ install: app
 	@launchctl bootout gui/$$(id -u) "$(HOME)/Library/LaunchAgents/com.aeon.relay.plist" 2>/dev/null || true
 	@launchctl bootstrap gui/$$(id -u) "$(HOME)/Library/LaunchAgents/com.aeon.relay.plist" 2>/dev/null || true
 	@echo "LaunchAgent installed (auto-start on login)"
+	@# Clean build artifact to prevent Spotlight duplicates
+	@rm -rf "$(APP_BUNDLE)"
 	@echo "Opening..."
 	@open "$(INSTALL_DIR)/$(APP_NAME).app"
 
