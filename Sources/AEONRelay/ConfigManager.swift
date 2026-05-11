@@ -33,6 +33,26 @@ final class ConfigManager: ObservableObject {
         if !fm.fileExists(atPath: configPath.path) {
             seedExampleConfigs()
         }
+
+        // Clean up old audit files
+        cleanupAuditFiles()
+    }
+
+    private func cleanupAuditFiles() {
+        let auditDir = Self.relayHome.appendingPathComponent("audit")
+        let retentionDays = globalConfig.auditRetentionDays
+        guard retentionDays > 0 else { return }
+        let cutoff = Calendar.current.date(byAdding: .day, value: -retentionDays, to: Date()) ?? Date()
+        guard let files = try? fm.contentsOfDirectory(at: auditDir, includingPropertiesForKeys: [.contentModificationDateKey])
+            .filter({ $0.pathExtension == "jsonl" }) else { return }
+        for file in files {
+            if let attrs = try? fm.attributesOfItem(atPath: file.path),
+               let modDate = attrs[.modificationDate] as? Date,
+               modDate < cutoff {
+                try? fm.removeItem(at: file)
+                logger.info("Cleaned up old audit file: \(file.lastPathComponent)")
+            }
+        }
     }
 
     // MARK: - Load
@@ -68,8 +88,16 @@ final class ConfigManager: ObservableObject {
             .filter({ $0.pathExtension == "json" }) else { return [] }
         let decoder = JSONDecoder()
         return files.compactMap { url in
-            guard let data = try? Data(contentsOf: url) else { return nil }
-            return try? decoder.decode(T.self, from: data)
+            guard let data = try? Data(contentsOf: url) else {
+                logger.warning("Could not read config file: \(url.lastPathComponent)")
+                return nil
+            }
+            do {
+                return try decoder.decode(T.self, from: data)
+            } catch {
+                logger.error("Failed to decode \(url.lastPathComponent): \(error.localizedDescription)")
+                return nil
+            }
         }
     }
 
@@ -465,12 +493,8 @@ struct GlobalConfig: Codable {
     var maxConcurrentExecutions: Int = 3
     var defaultTimeout: Int = 300
     var rateLimitPerMinute: Int = 10
-    var progressUpdateInterval: Int = 30
-    var firstProgressDelay: Int = 15
     var logLevel: String = "info"
     var auditRetentionDays: Int = 90
-    var voiceOnCompletion: Bool = true
-    var notificationsEnabled: Bool = true
 }
 
 struct ChannelConfig: Codable, Identifiable {

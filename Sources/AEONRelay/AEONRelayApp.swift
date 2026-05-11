@@ -30,6 +30,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configManager.loadConfig()
         channelListener.startAll()
 
+        // Register for app termination to clean up channels
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            Task { await self.channelListener.stopAll() }
+        }
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem.button {

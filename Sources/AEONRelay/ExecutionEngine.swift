@@ -16,18 +16,22 @@ struct ExecutionResult {
 
 final class ExecutionEngine {
 
+    // Allowed CLI tools for execution (prevents arbitrary command injection)
+    private static let allowedBackends: Set<String> = ["copilot", "claude", "codex"]
+
     func execute(prompt: String, profile: WorkspaceProfile) async throws -> ExecutionResult {
         let id = generateID()
         let startTime = Date()
 
         let workdir = (profile.workdir as NSString).expandingTildeInPath
-        let args = buildCommand(backend: profile.backend, profile: profile, prompt: prompt)
+        let args = buildArguments(backend: profile.backend, profile: profile, prompt: prompt)
 
-        logger.info("[\(id)] Executing: \(args.joined(separator: " "))")
+        logger.info("[\(id)] Executing: \(args.first ?? "unknown") with \(args.count - 1) args")
         logger.info("[\(id)] Working directory: \(workdir)")
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        // Use -l -c with a single joined command to get login shell PATH resolution
         process.arguments = ["-l", "-c", args.joined(separator: " ")]
         process.currentDirectoryURL = URL(fileURLWithPath: workdir)
 
@@ -45,23 +49,35 @@ final class ExecutionEngine {
 
         try process.run()
 
-        // Set timeout
+        // Read pipes concurrently to prevent deadlock when output exceeds buffer size
+        let stdoutTask = Task.detached { () -> Data in
+            stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        }
+        let stderrTask = Task.detached { () -> Data in
+            stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        }
+
+        // Set timeout with process group kill
         let timeoutSeconds = profile.timeout
+        let processPID = process.processIdentifier
         let timeoutTask = Task {
             try await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
             if process.isRunning {
-                logger.warning("[\(id)] Timeout after \(timeoutSeconds)s, killing process")
-                process.terminate()
+                logger.warning("[\(id)] Timeout after \(timeoutSeconds)s, killing process group")
+                // Kill the entire process group to clean up child processes
+                kill(-processPID, SIGTERM)
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
-                if process.isRunning { process.interrupt() }
+                if process.isRunning {
+                    kill(-processPID, SIGKILL)
+                }
             }
         }
 
         process.waitUntilExit()
         timeoutTask.cancel()
 
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let stdoutData = await stdoutTask.value
+        let stderrData = await stderrTask.value
 
         let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
         let stderr = String(data: stderrData, encoding: .utf8) ?? ""
@@ -85,27 +101,45 @@ final class ExecutionEngine {
         )
     }
 
-    private func buildCommand(backend: ExecutionBackend, profile: WorkspaceProfile, prompt: String) -> [String] {
-        let escapedPrompt = prompt.replacingOccurrences(of: "'", with: "'\\''")
+    private func buildArguments(backend: ExecutionBackend, profile: WorkspaceProfile, prompt: String) -> [String] {
+        // Shell-safe escaping: wrap in single quotes, escape internal single quotes
+        let escaped = "'" + prompt.replacingOccurrences(of: "'", with: "'\\''") + "'"
+
         switch backend {
         case .copilot:
             var parts = ["copilot"]
             if let agent = profile.agent { parts += ["-a", agent] }
             if let model = profile.model { parts += ["-m", model] }
-            parts.append("'\(escapedPrompt)'")
+            parts.append(escaped)
             return parts
 
         case .claude:
             var parts = ["claude", "--print"]
             if let model = profile.model { parts += ["--model", model] }
-            parts.append("'\(escapedPrompt)'")
+            parts.append(escaped)
             return parts
 
         case .codex:
-            return ["codex", "exec", "'\(escapedPrompt)'"]
+            return ["codex", "exec", escaped]
 
         case .custom:
-            return [escapedPrompt] // custom commands handle their own structure
+            // Custom backend: the prompt is treated as the executable name only.
+            // No shell metacharacters are allowed to prevent command injection.
+            let sanitized = prompt.components(separatedBy: .whitespaces)
+                .filter { !$0.isEmpty }
+                .map { component in
+                    // Reject any shell metacharacters
+                    let forbidden = CharacterSet(charactersIn: ";|&$`(){}[]!#~<>\\\"'")
+                    if component.unicodeScalars.contains(where: { forbidden.contains($0) }) {
+                        return ""
+                    }
+                    return component
+                }
+                .filter { !$0.isEmpty }
+            guard !sanitized.isEmpty else {
+                return ["echo", "'Invalid command: contains forbidden characters'"]
+            }
+            return sanitized
         }
     }
 

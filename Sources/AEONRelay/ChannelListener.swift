@@ -13,13 +13,13 @@ final class ChannelListener: ObservableObject {
     private let executionEngine = ExecutionEngine()
     private let auditLogger = AuditLogger()
     private let replySender = ReplySender()
-    private var securityManager = SecurityManager()
+    private let securityManager = SecurityManager()
 
     // Track running executions per profile
     private var runningExecutions: Set<String> = []
     private var runningTasks: [String: Task<Void, Never>] = [String: Task<Void, Never>]()
-    private var executionQueue: [(IncomingMessage, ChannelConfig, WorkspaceProfile)] = []
     private var channelProfileOverrides: [String: String] = [:]
+    private var activeExecutionCount = 0
 
     init(configManager: ConfigManager) {
         self.configManager = configManager
@@ -141,14 +141,14 @@ final class ChannelListener: ObservableObject {
 
     private func handleMessage(_ message: IncomingMessage, channel: ChannelConfig) async {
         // Security check
-        let authResult = securityManager.authorize(message, channel: channel, rateLimit: configManager.globalConfig.rateLimitPerMinute)
+        let authResult = await securityManager.authorize(message, channel: channel, rateLimit: configManager.globalConfig.rateLimitPerMinute)
         guard case .authorized = authResult else {
             logger.warning("Unauthorized message from \(message.senderID) on \(channel.name)")
             return // silent deny
         }
 
         // Rate limit check
-        guard securityManager.checkRateLimit(senderID: message.senderID, limit: configManager.globalConfig.rateLimitPerMinute) else {
+        guard await securityManager.checkRateLimit(senderID: message.senderID, limit: configManager.globalConfig.rateLimitPerMinute) else {
             logger.warning("Rate limited \(message.senderID)")
             return
         }
@@ -166,6 +166,15 @@ final class ChannelListener: ObservableObject {
             await sendReply("Profile '\(profileName)' not found. Use /profiles to see available profiles.", to: message, channel: channel)
             return
         }
+
+        // Enforce concurrency limit
+        let maxConcurrent = configManager.globalConfig.maxConcurrentExecutions
+        guard activeExecutionCount < maxConcurrent else {
+            await sendReply("Busy. Maximum concurrent executions reached. Try again shortly.", to: message, channel: channel)
+            return
+        }
+        activeExecutionCount += 1
+        defer { activeExecutionCount -= 1 }
 
         // Send typing indicator
         if channel.showTyping, let provider = providers[channel.name] {
@@ -204,7 +213,7 @@ final class ChannelListener: ObservableObject {
 
         } catch {
             logger.error("Execution failed: \(error.localizedDescription)")
-            await sendReply("Execution failed: \(error.localizedDescription)", to: message, channel: channel)
+            await sendReply("Execution failed. Check the audit log for details.", to: message, channel: channel)
         }
     }
 

@@ -40,6 +40,35 @@ final class TelegramProvider: MessageProvider {
     }
 
     func sendReply(_ message: String, to conversation: ConversationID) async throws {
+        // Telegram's message limit is 4096 characters; split if needed
+        let maxLen = 4096
+        if message.count <= maxLen {
+            try await sendSingleMessage(message, to: conversation)
+        } else {
+            // Split on newlines near the boundary to avoid mid-word breaks
+            var remaining = message
+            while !remaining.isEmpty {
+                let chunk: String
+                if remaining.count <= maxLen {
+                    chunk = remaining
+                    remaining = ""
+                } else {
+                    let cutIndex = remaining.index(remaining.startIndex, offsetBy: maxLen)
+                    let searchRange = remaining.startIndex..<cutIndex
+                    if let lastNewline = remaining.range(of: "\n", options: .backwards, range: searchRange) {
+                        chunk = String(remaining[remaining.startIndex..<lastNewline.lowerBound])
+                        remaining = String(remaining[lastNewline.upperBound...])
+                    } else {
+                        chunk = String(remaining.prefix(maxLen))
+                        remaining = String(remaining.dropFirst(maxLen))
+                    }
+                }
+                try await sendSingleMessage(chunk, to: conversation)
+            }
+        }
+    }
+
+    private func sendSingleMessage(_ message: String, to conversation: ConversationID) async throws {
         let url = URL(string: "\(baseURL)/sendMessage")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

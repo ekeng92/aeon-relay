@@ -3,7 +3,8 @@ import os
 
 private let logger = Logger(subsystem: "com.aeon.relay", category: "Security")
 
-struct SecurityManager {
+// Actor ensures thread-safe access to mutable rate-limit state
+actor SecurityManager {
 
     enum AuthResult {
         case authorized
@@ -27,7 +28,7 @@ struct SecurityManager {
         return .authorized
     }
 
-    mutating func checkRateLimit(senderID: String, limit: Int) -> Bool {
+    func checkRateLimit(senderID: String, limit: Int) -> Bool {
         let now = Date()
         let cutoff = now.addingTimeInterval(-60)
         var timestamps = messageTimestamps[senderID] ?? []
